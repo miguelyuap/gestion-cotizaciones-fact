@@ -14,6 +14,9 @@ export interface Profile {
   bank_name: string;
   account_type: string;
   account_number: string;
+  account_holder_name?: string;
+  account_holder_doc?: string;
+  document_subtitle?: string;
   legal_text: string;
   signature_url?: string;
   updated_at?: string;
@@ -37,6 +40,8 @@ export interface DocumentItem {
   description: string;
   quantity: number;
   unit_price: number;
+  discount_rate?: number;
+  tax_rate?: number;
   total_price: number;
 }
 
@@ -47,11 +52,16 @@ export interface DocumentHeader {
   number: string;
   date: string;
   due_date?: string;
+  discount_rate?: number;
+  discount_amount?: number;
+  tax_rate?: number;
+  tax_amount?: number;
   retention_applied: boolean;
   retention_rate: number;
   retention_amount: number;
   subtotal: number;
   total_amount: number;
+  amount_in_words?: string;
   status: DocumentStatus;
   notes?: string;
   created_at?: string;

@@ -1,8 +1,15 @@
 @import "tailwindcss";
 
+@variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #f8fafc;
   --foreground: #0f172a;
+}
+
+.dark {
+  --background: #0b0f19;
+  --foreground: #f8fafc;
 }
 
 body {
@@ -11,39 +18,88 @@ body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   margin: 0;
   padding: 0;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* Estilos de Impresión Especializados */
+/* ====================================================================
+   ESTILOS DE IMPRESIÓN PDF PERFECTO A 1 SOLA HOJA CARTA (@media print)
+   ==================================================================== */
+
+@page {
+  size: letter portrait;
+  margin: 0; /* Elimina encabezados/pies de página por defecto del navegador */
+}
+
 @media print {
-  body {
-    background: #ffffff !important;
-    color: #000000 !important;
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    color-adjust: exact !important;
   }
 
-  .no-print {
+  html, body, .dark body, .dark html {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+  }
+
+  /* 1. Ocultar todos los elementos de navegación, menús y botones web */
+  .no-print, nav, header, footer, button, .theme-toggle {
     display: none !important;
   }
 
+  /* 2. Ajuste del área de impresión para abarcar la hoja Carta completa */
   .print-area {
     margin: 0 !important;
-    padding: 0 !important;
+    padding: 8mm 12mm !important;
     box-shadow: none !important;
     border: none !important;
     width: 100% !important;
+    max-width: 100% !important;
+    background: #ffffff !important;
+    border-radius: 0 !important;
+    box-sizing: border-box !important;
   }
 
-  /* Formato Térmico POS 80mm/58mm */
+  /* 3. Control estricto para evitar saltos de página innecesarios */
+  .avoid-break,
+  .bank-box,
+  .legal-box,
+  .signature-box,
+  .totals-box,
+  tr,
+  tbody tr {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    break-after: avoid !important;
+    page-break-after: avoid !important;
+  }
+
+  /* Forzar disposición horizontal exacta igual al preliminar web */
+  .print-area .flex-row {
+    flex-direction: row !important;
+  }
+  .print-area .grid-cols-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .print-area .grid-cols-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  }
+
+  /* 4. Formato Térmico POS 80mm/58mm */
   .ticket-container {
     width: 78mm !important;
     max-width: 78mm !important;
-    font-size: 11px !important;
+    font-size: 10px !important;
     line-height: 1.2 !important;
-    padding: 2mm !important;
+    padding: 1mm !important;
     margin: 0 auto !important;
-  }
-
-  @page ticketPage {
-    size: 80mm auto;
-    margin: 0;
+    background: #ffffff !important;
   }
 }

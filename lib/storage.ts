@@ -3,6 +3,11 @@ import { getCurrentUser } from './auth';
 import { Client, DocumentWithDetails, Profile } from './types';
 import { DEFAULT_PROFILE } from './utils';
 
+function isValidUUID(str?: string | null): boolean {
+  if (!str) return false;
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+}
+
 const INITIAL_CLIENTS: Client[] = [
   {
     id: 'c1-demo',
@@ -59,30 +64,6 @@ const INITIAL_DOCUMENTS: DocumentWithDetails[] = [
       },
     ],
   },
-  {
-    id: 'doc2-demo',
-    client_id: 'c2-demo',
-    type: 'quotation',
-    number: 'COT-001',
-    date: new Date().toISOString().split('T')[0],
-    retention_applied: false,
-    retention_rate: 0,
-    retention_amount: 0,
-    subtotal: 3500000,
-    total_amount: 3500000,
-    status: 'draft',
-    notes: 'Cotización válida por 15 días calendario.',
-    clients: INITIAL_CLIENTS[1],
-    document_items: [
-      {
-        id: 'item3',
-        description: 'Consultoría e implementación de software de gestión comercial',
-        quantity: 1,
-        unit_price: 3500000,
-        total_price: 3500000,
-      },
-    ],
-  },
 ];
 
 function getLocal<T>(key: string, fallback: T): T {
@@ -105,35 +86,31 @@ function setLocal<T>(key: string, value: T): void {
 }
 
 // --------------------------------------------------------------------
-// PROFILES API
+// PROFILES API & SUPABASE LAYER
 // --------------------------------------------------------------------
 export async function getProfile(): Promise<Profile> {
   const currentUser = await getCurrentUser();
   if (isSupabaseConfigured() && currentUser?.id) {
     try {
-      const { data, error } = await supabase.from('profiles').select('*').eq('id', currentUser.id).maybeSingle();
-      if (!error && data) return data;
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', currentUser.id)
+        .maybeSingle();
+
+      if (!error && data) {
+        const merged = { ...DEFAULT_PROFILE, ...data };
+        setLocal('gst_profile', merged);
+        return merged;
+      }
     } catch (e) {
-      console.warn('Error leyendo perfil en Supabase:', e);
+      console.warn('Error fetching profile directly from Supabase:', e);
     }
-    return {
-      id: currentUser.id,
-      razon_social: currentUser.user_metadata?.razon_social || 'MI EMPRESA O NOMBRE COMPLETO S.A.S.',
-      document_type: 'CC',
-      document_number: '123456789-0',
-      phone: '+57 300 123 4567',
-      email: currentUser.email || 'contacto@miempresa.co',
-      address: 'Calle 100 # 15-20',
-      city: 'Bogotá D.C., Colombia',
-      bank_name: 'Bancolombia',
-      account_type: 'Ahorros',
-      account_number: '123-456789-00',
-      legal_text: DEFAULT_PROFILE.legal_text,
-    };
   }
   const localProf = getLocal<Profile>('gst_profile', DEFAULT_PROFILE);
-  if (currentUser?.email) localProf.email = currentUser.email;
-  return localProf;
+  const merged = { ...DEFAULT_PROFILE, ...localProf };
+  if (currentUser?.email && !merged.email) merged.email = currentUser.email;
+  return merged;
 }
 
 export async function saveProfile(profile: Profile): Promise<boolean> {
@@ -142,91 +119,149 @@ export async function saveProfile(profile: Profile): Promise<boolean> {
 
   if (isSupabaseConfigured() && currentUser?.id) {
     try {
-      const payload = { ...profile, id: currentUser.id };
-      await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
+      const cleanPayload = {
+        id: currentUser.id,
+        razon_social: profile.razon_social || '',
+        document_type: profile.document_type || 'CC',
+        document_number: profile.document_number || '',
+        phone: profile.phone || '',
+        email: profile.email || currentUser.email || '',
+        address: profile.address || '',
+        city: profile.city || '',
+        bank_name: profile.bank_name || '',
+        account_type: profile.account_type || '',
+        account_number: profile.account_number || '',
+        account_holder_name: profile.account_holder_name || '',
+        account_holder_doc: profile.account_holder_doc || '',
+        document_subtitle: profile.document_subtitle || '',
+        legal_text: profile.legal_text || '',
+        signature_url: profile.signature_url || '',
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error } = await supabase
+        .from('profiles')
+        .upsert(cleanPayload, { onConflict: 'id' });
+
+      if (error) {
+        console.error('Error upserting profile in Supabase:', error.message || error);
+      }
     } catch (e) {
-      console.error('Error guardando perfil en Supabase:', e);
+      console.error('Error in saveProfile Supabase query:', e);
     }
   }
   return true;
 }
 
 // --------------------------------------------------------------------
-// CLIENTS API
+// CLIENTS API & SUPABASE LAYER
 // --------------------------------------------------------------------
 export async function getClients(): Promise<Client[]> {
   const currentUser = await getCurrentUser();
-  if (isSupabaseConfigured()) {
-    if (currentUser?.id) {
-      try {
-        const { data, error } = await supabase
-          .from('clients')
-          .select('*')
-          .or(`user_id.eq.${currentUser.id},user_id.is.null`)
-          .order('name');
-        if (!error && data) return data;
-      } catch (e) {
-        console.warn('Error buscando clientes en Supabase:', e);
+  if (isSupabaseConfigured() && currentUser?.id) {
+    try {
+      const { data, error } = await supabase
+        .from('clients')
+        .select('*')
+        .eq('user_id', currentUser.id)
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        setLocal('gst_clients', data);
+        return data;
       }
+    } catch (e) {
+      console.warn('Error fetching clients directly from Supabase:', e);
     }
-    return [];
   }
   return getLocal<Client[]>('gst_clients', INITIAL_CLIENTS);
 }
 
-export async function createClient(clientData: Omit<Client, 'id'>): Promise<Client> {
+export async function createClient(clientData: Omit<Client, 'id'> & { id?: string }): Promise<Client> {
   const currentUser = await getCurrentUser();
-  const newClient: Client = {
-    id: isSupabaseConfigured() ? crypto.randomUUID() : `client-${Date.now()}`,
-    ...clientData,
-  };
+  const isValidId = isValidUUID(clientData.id);
+  const clientId = isValidId ? (clientData.id as string) : `client-${Date.now()}`;
 
   if (isSupabaseConfigured() && currentUser?.id) {
     try {
-      const payload = { ...clientData, user_id: currentUser.id };
-      const { data, error } = await supabase.from('clients').insert([payload]).select().single();
-      if (!error && data) return data;
+      const payload = {
+        ...(isValidId ? { id: clientData.id } : {}),
+        user_id: currentUser.id,
+        name: clientData.name,
+        document_type: clientData.document_type || 'NIT',
+        document_number: clientData.document_number || '0',
+        address: clientData.address || '',
+        email: clientData.email || '',
+        phone: clientData.phone || '',
+        city: clientData.city || '',
+      };
+
+      const { data, error } = await supabase
+        .from('clients')
+        .upsert(payload, { onConflict: 'id' })
+        .select()
+        .single();
+
+      if (!error && data) {
+        const current = getLocal<Client[]>('gst_clients', INITIAL_CLIENTS);
+        const updated = [data, ...current.filter((c) => c.id !== data.id)];
+        setLocal('gst_clients', updated);
+        return data;
+      } else if (error) {
+        console.error('Error upserting client in Supabase:', error.message || error);
+      }
     } catch (e) {
-      console.error('Error insertando cliente en Supabase:', e);
+      console.error('Error in createClient Supabase query:', e);
     }
   }
 
+  const newClient: Client = {
+    id: clientId,
+    ...clientData,
+  };
+
   const currentClients = getLocal<Client[]>('gst_clients', INITIAL_CLIENTS);
-  const updated = [newClient, ...currentClients];
+  const exists = currentClients.some((c) => c.id === clientId);
+  const updated = exists ? currentClients.map((c) => (c.id === clientId ? newClient : c)) : [newClient, ...currentClients];
   setLocal('gst_clients', updated);
   return newClient;
 }
 
+export async function updateClient(clientData: Client): Promise<Client> {
+  return createClient(clientData);
+}
+
 // --------------------------------------------------------------------
-// DOCUMENTS API
+// DOCUMENTS API & SUPABASE LAYER
 // --------------------------------------------------------------------
 export async function getDocuments(): Promise<DocumentWithDetails[]> {
   const currentUser = await getCurrentUser();
-  if (isSupabaseConfigured()) {
-    if (currentUser?.id) {
-      try {
-        const { data, error } = await supabase
-          .from('documents')
-          .select(`
-            *,
-            clients (*),
-            document_items (*)
-          `)
-          .or(`user_id.eq.${currentUser.id},user_id.is.null`)
-          .order('created_at', { ascending: false });
+  if (isSupabaseConfigured() && currentUser?.id) {
+    try {
+      const { data, error } = await supabase
+        .from('documents')
+        .select(`
+          *,
+          clients (*),
+          document_items (*)
+        `)
+        .eq('user_id', currentUser.id)
+        .order('created_at', { ascending: false });
 
-        if (!error && data) return data as DocumentWithDetails[];
-      } catch (e) {
-        console.warn('Error leyendo documentos en Supabase:', e);
+      if (!error && data) {
+        setLocal('gst_documents', data);
+        return data;
       }
+    } catch (e) {
+      console.warn('Error fetching documents directly from Supabase:', e);
     }
-    return [];
   }
   return getLocal<DocumentWithDetails[]>('gst_documents', INITIAL_DOCUMENTS);
 }
 
 export async function getDocumentById(id: string): Promise<DocumentWithDetails | null> {
-  if (isSupabaseConfigured()) {
+  const currentUser = await getCurrentUser();
+  if (isSupabaseConfigured() && currentUser?.id) {
     try {
       const { data, error } = await supabase
         .from('documents')
@@ -236,11 +271,11 @@ export async function getDocumentById(id: string): Promise<DocumentWithDetails |
           document_items (*)
         `)
         .eq('id', id)
-        .single();
+        .maybeSingle();
 
-      if (!error && data) return data as DocumentWithDetails;
+      if (!error && data) return data;
     } catch (e) {
-      console.warn('Error buscando documento en Supabase:', e);
+      console.warn('Error fetching document detail directly from Supabase:', e);
     }
   }
 
@@ -252,87 +287,140 @@ export async function saveDocument(
   docData: Omit<DocumentWithDetails, 'id'> & { id?: string }
 ): Promise<DocumentWithDetails> {
   const currentUser = await getCurrentUser();
-  const isEdit = !!docData.id;
-  const docId = docData.id || `doc-${Date.now()}`;
+  const isValidDocId = isValidUUID(docData.id);
+  const isValidClientId = isValidUUID(docData.client_id);
+  const docId = isValidDocId ? (docData.id as string) : `doc-${Date.now()}`;
 
-  const documentHeader = {
-    user_id: currentUser?.id || undefined,
-    client_id: docData.client_id,
-    type: docData.type,
-    number: docData.number,
-    date: docData.date,
-    due_date: docData.due_date,
-    retention_applied: docData.retention_applied,
-    retention_rate: docData.retention_rate,
-    retention_amount: docData.retention_amount,
-    subtotal: docData.subtotal,
-    total_amount: docData.total_amount,
-    status: docData.status,
-    notes: docData.notes,
-  };
-
-  const items = docData.document_items || [];
-
-  if (isSupabaseConfigured()) {
+  if (isSupabaseConfigured() && currentUser?.id) {
     try {
-      if (isEdit) {
-        await supabase.from('documents').update(documentHeader).eq('id', docId);
-        await supabase.from('document_items').delete().eq('document_id', docId);
-      } else {
-        const { data: insertedDoc } = await supabase
+      const documentHeader: Record<string, unknown> = {
+        ...(isValidDocId ? { id: docData.id } : {}),
+        user_id: currentUser.id,
+        client_id: isValidClientId ? docData.client_id : null,
+        type: docData.type,
+        number: docData.number,
+        date: docData.date || new Date().toISOString().split('T')[0],
+        due_date: docData.due_date && docData.due_date.trim() !== '' ? docData.due_date : null,
+        discount_rate: Number(docData.discount_rate) || 0,
+        discount_amount: Number(docData.discount_amount) || 0,
+        tax_rate: Number(docData.tax_rate) || 0,
+        tax_amount: Number(docData.tax_amount) || 0,
+        retention_applied: Boolean(docData.retention_applied),
+        retention_rate: Number(docData.retention_rate) || 0,
+        retention_amount: Number(docData.retention_amount) || 0,
+        subtotal: Number(docData.subtotal) || 0,
+        total_amount: Number(docData.total_amount) || 0,
+        amount_in_words: docData.amount_in_words || '',
+        status: docData.status || 'draft',
+        notes: docData.notes || '',
+      };
+
+      let { data: upsertedDoc, error: docErr } = await supabase
+        .from('documents')
+        .upsert(documentHeader, { onConflict: 'id' })
+        .select()
+        .single();
+
+      // Reintento resiliente si la columna 'amount_in_words' no existe aún en la BD remota
+      if (docErr && docErr.message?.includes('amount_in_words')) {
+        console.warn('Reintentando guardado en Supabase omitiendo la columna amount_in_words...');
+        delete documentHeader.amount_in_words;
+        const retryRes = await supabase
           .from('documents')
-          .insert([documentHeader])
+          .upsert(documentHeader, { onConflict: 'id' })
           .select()
           .single();
-        if (insertedDoc) docData.id = insertedDoc.id;
+
+        upsertedDoc = retryRes.data;
+        docErr = retryRes.error;
       }
 
-      const itemsToInsert = items.map((it) => ({
-        document_id: docData.id || docId,
-        description: it.description,
-        quantity: it.quantity,
-        unit_price: it.unit_price,
-        total_price: it.total_price,
-      }));
+      if (!docErr && upsertedDoc) {
+        await supabase.from('document_items').delete().eq('document_id', upsertedDoc.id);
 
-      await supabase.from('document_items').insert(itemsToInsert);
+        const itemsToInsert = (docData.document_items || []).map((it) => ({
+          document_id: upsertedDoc.id,
+          description: it.description,
+          quantity: Number(it.quantity) || 1,
+          unit_price: Number(it.unit_price) || 0,
+          discount_rate: Number(it.discount_rate) || 0,
+          tax_rate: Number(it.tax_rate) || 0,
+          total_price: Number(it.total_price) || 0,
+        }));
 
-      const fullDoc = await getDocumentById(docData.id || docId);
-      if (fullDoc) return fullDoc;
+        if (itemsToInsert.length > 0) {
+          const { error: itemsErr } = await supabase.from('document_items').insert(itemsToInsert);
+          if (itemsErr) console.error('Error inserting document_items in Supabase:', itemsErr.message || itemsErr);
+        }
+
+        const { data: fullDoc } = await supabase
+          .from('documents')
+          .select(`
+            *,
+            clients (*),
+            document_items (*)
+          `)
+          .eq('id', upsertedDoc.id)
+          .single();
+
+        const result = fullDoc || upsertedDoc;
+        const currentDocs = getLocal<DocumentWithDetails[]>('gst_documents', []);
+        const updated = [result, ...currentDocs.filter((d) => d.id !== result.id)];
+        setLocal('gst_documents', updated);
+        return result;
+      } else if (docErr) {
+        console.error('Error saving document in Supabase:', docErr.message || docErr);
+      }
     } catch (e) {
-      console.error('Error guardando documento en Supabase:', e);
+      console.error('Error in saveDocument Supabase query:', e);
     }
   }
 
-  // Fallback local
   const currentDocs = getLocal<DocumentWithDetails[]>('gst_documents', INITIAL_DOCUMENTS);
   const clients = await getClients();
   const matchedClient = clients.find((c) => c.id === docData.client_id) || null;
 
   const fullDoc: DocumentWithDetails = {
     id: docId,
-    ...documentHeader,
+    client_id: docData.client_id,
+    type: docData.type,
+    number: docData.number,
+    date: docData.date,
+    due_date: docData.due_date,
+    discount_rate: docData.discount_rate || 0,
+    discount_amount: docData.discount_amount || 0,
+    tax_rate: docData.tax_rate || 0,
+    tax_amount: docData.tax_amount || 0,
+    retention_applied: docData.retention_applied,
+    retention_rate: docData.retention_rate,
+    retention_amount: docData.retention_amount,
+    subtotal: docData.subtotal,
+    total_amount: docData.total_amount,
+    amount_in_words: docData.amount_in_words || '',
+    status: docData.status,
+    notes: docData.notes,
     clients: matchedClient,
-    document_items: items,
+    document_items: docData.document_items || [],
   };
 
-  let updatedDocs: DocumentWithDetails[];
-  if (isEdit) {
-    updatedDocs = currentDocs.map((d) => (d.id === docId ? fullDoc : d));
-  } else {
-    updatedDocs = [fullDoc, ...currentDocs];
-  }
-
+  const exists = currentDocs.some((d) => d.id === docId);
+  const updatedDocs = exists ? currentDocs.map((d) => (d.id === docId ? fullDoc : d)) : [fullDoc, ...currentDocs];
   setLocal('gst_documents', updatedDocs);
   return fullDoc;
 }
 
 export async function updateDocumentStatus(id: string, status: DocumentWithDetails['status']): Promise<boolean> {
-  if (isSupabaseConfigured()) {
+  const currentUser = await getCurrentUser();
+  if (isSupabaseConfigured() && currentUser?.id) {
     try {
-      await supabase.from('documents').update({ status }).eq('id', id);
+      const { error } = await supabase
+        .from('documents')
+        .update({ status })
+        .eq('id', id);
+
+      if (error) console.error('Error updating document status in Supabase:', error.message || error);
     } catch (e) {
-      console.error('Error actualizando estado en Supabase:', e);
+      console.error('Error updating status in Supabase:', e);
     }
   }
 

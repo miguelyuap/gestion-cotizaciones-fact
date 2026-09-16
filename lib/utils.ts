@@ -25,25 +25,42 @@ export function formatDate(dateString: string): string {
   }).format(date);
 }
 
+export function formatDateShort(dateString: string): string {
+  if (!dateString) return '';
+  const date = new Date(dateString + 'T00:00:00');
+  return new Intl.DateTimeFormat('es-CO', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  }).format(date);
+}
+
 export function generateNextNumber(type: 'quotation' | 'bill', count: number): string {
   const prefix = type === 'quotation' ? 'COT' : 'CC';
   const nextNum = (count + 1).toString().padStart(3, '0');
   return `${prefix}-${nextNum}`;
 }
 
+export const DEFAULT_DOCUMENT_SUBTITLE = 
+  'MODELO DE DOCUMENTO EQUIVALENTE A FACTURA (Art. 3 Decreto 522 de Marzo de 2003)';
+
 export const DEFAULT_LEGAL_TEXT = 
-  'Hago constar bajo la gravedad de juramento que no he contratado o vinculado dos (2) o más trabajadores o contratistas asociados a mi actividad económica por un término igual o superior a noventa (90) días continuos o discontinuos dentro del mismo año gravable (Art. 383 del Estatuto Tributario y Decreto 522 de 2003). Persona Natural No Responsable de IVA (Art. 437 Parágrafo 3 del E.T.).';
+  'Informo que no tengo contratado 2 o más personas asociadas a mi actividad como independiente, razón por la cual solicito se me aplique la retención en la fuente del artículo 383 del Estatuto Tributario y siguientes.';
 
 export const DEFAULT_PROFILE = {
-  razon_social: 'CARLOS ALBERTO GÓMEZ PÉREZ',
+  razon_social: '',
   document_type: 'CC',
-  document_number: '1020304050',
-  phone: '+57 310 987 6543',
-  email: 'carlos.gomez@ejemplo.com',
-  address: 'Carrera 7 # 72-10, Apto 502',
-  city: 'Bogotá D.C., Colombia',
+  document_number: '',
+  phone: '',
+  email: '',
+  address: '',
+  city: '',
   bank_name: 'Bancolombia',
   account_type: 'Ahorros',
-  account_number: '241-000123-88',
+  account_number: '',
+  account_holder_name: '',
+  account_holder_doc: '',
+  document_subtitle: DEFAULT_DOCUMENT_SUBTITLE,
   legal_text: DEFAULT_LEGAL_TEXT,
+  signature_url: '',
 };

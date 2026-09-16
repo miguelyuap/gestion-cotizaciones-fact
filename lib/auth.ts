@@ -1,10 +1,17 @@
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 import { User } from '@supabase/supabase-js';
 
+import { DEFAULT_LEGAL_TEXT } from './utils';
+
 export interface SignUpData {
   email: string;
   password: string;
   razonSocial: string;
+  documentType?: string;
+  documentNumber?: string;
+  phone?: string;
+  address?: string;
+  city?: string;
 }
 
 export interface SignInData {
@@ -13,14 +20,49 @@ export interface SignInData {
 }
 
 // --------------------------------------------------------------------
-// REGISTRO E INSERCIÓN DIRECTA EN SUPABASE
+// REGISTRO E INSERCIÓN DIRECTA EN SUPABASE & LOCALSTORAGE
 // --------------------------------------------------------------------
-export async function signUpUser({ email, password, razonSocial }: SignUpData) {
+export async function signUpUser({
+  email,
+  password,
+  razonSocial,
+  documentType = 'CC',
+  documentNumber = '',
+  phone = '',
+  address = '',
+  city = '',
+}: SignUpData) {
+  const profileObject = {
+    razon_social: razonSocial,
+    document_type: documentType,
+    document_number: documentNumber,
+    phone: phone,
+    email: email,
+    address: address,
+    city: city,
+    bank_name: 'Bancolombia',
+    account_type: 'Ahorros',
+    account_number: '',
+    legal_text: DEFAULT_LEGAL_TEXT,
+    signature_url: '',
+  };
+
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('gst_profile', JSON.stringify(profileObject));
+  }
+
   if (!isSupabaseConfigured()) {
     const mockUser: User = {
       id: 'demo-user-123',
       app_metadata: {},
-      user_metadata: { razon_social: razonSocial },
+      user_metadata: {
+        razon_social: razonSocial,
+        document_type: documentType,
+        document_number: documentNumber,
+        phone: phone,
+        address: address,
+        city: city,
+      },
       aud: 'authenticated',
       created_at: new Date().toISOString(),
       email: email,
@@ -38,6 +80,11 @@ export async function signUpUser({ email, password, razonSocial }: SignUpData) {
     options: {
       data: {
         razon_social: razonSocial,
+        document_type: documentType,
+        document_number: documentNumber,
+        phone: phone,
+        address: address,
+        city: city,
       },
     },
   });
@@ -54,19 +101,18 @@ export async function signUpUser({ email, password, razonSocial }: SignUpData) {
     if (!signInError && signInData.user) {
       currentUser = signInData.user;
     } else if (signInError) {
-      // Si el error es por verificación de correo pendiente en Supabase Dashboard
       console.warn('Inicio de sesión inmediato post-registro:', signInError.message);
     }
   }
 
-  // 3. Garantizar que el registro exista en la tabla public.profiles
+  // 3. Garantizar que el perfil exista completo en la tabla public.profiles
   if (currentUser) {
     try {
       await supabase.from('profiles').upsert(
         {
           id: currentUser.id,
-          email: currentUser.email,
-          razon_social: razonSocial || 'MI EMPRESA S.A.S.',
+          ...profileObject,
+          id_user: currentUser.id,
         },
         { onConflict: 'id' }
       );

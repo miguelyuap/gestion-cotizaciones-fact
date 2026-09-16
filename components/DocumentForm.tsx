@@ -1,64 +1,64 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { 
-  Plus, 
-  Trash2, 
-  UserPlus, 
-  Calculator, 
-  Save, 
-  FileText, 
-  Building2, 
-  AlertCircle,
-  Percent
-} from 'lucide-react';
-import { Client, DocumentItem, DocumentType, Profile } from '@/lib/types';
+import { Plus, Trash2 } from 'lucide-react';
+import { Client, DocumentItem, DocumentType } from '@/lib/types';
 import { getClients, createClient, saveDocument, getProfile, getDocuments } from '@/lib/storage';
 import { formatCOP, generateNextNumber } from '@/lib/utils';
+import { calculateDocumentSummary } from '@/lib/services/taxCalculator';
+import Button from '@/components/ui/Button';
+import Card from '@/components/ui/Card';
 
 export default function DocumentForm() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [clients, setClients] = useState<Client[]>([]);
-  const [profile, setProfile] = useState<Profile | null>(null);
+
+  // Toast / Feedback message
+  const [toast, setToast] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
 
   // Campos del Formulario
   const [type, setType] = useState<DocumentType>('bill');
   const [number, setNumber] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
-  const [dueDate, setDueDate] = useState('');
-  const [selectedClientId, setSelectedClientId] = useState('');
-  const [notes, setNotes] = useState('');
+  const [date] = useState(new Date().toISOString().split('T')[0]);
 
-  // Retención en la fuente
+  // Selección y datos del cliente
+  const [selectedClientOption, setSelectedClientOption] = useState<string>('new');
+  const [clientNameInput, setClientNameInput] = useState('');
+  const [clientDocNumInput, setClientDocNumInput] = useState('');
+  const [clientDocTypeInput, setClientDocTypeInput] = useState('CC');
+
+  // Impuestos y Descuentos
+  const [discountRate] = useState<number>(0);
+  const [taxRate, setTaxRate] = useState<number>(0);
   const [retentionApplied, setRetentionApplied] = useState(false);
   const [retentionRate, setRetentionRate] = useState<number>(2.5);
 
   // Tabla Dinámica de Ítems
   const [items, setItems] = useState<DocumentItem[]>([
-    { description: 'Servicios profesionales de desarrollo web y soporte técnico', quantity: 1, unit_price: 1500000, total_price: 1500000 }
+    { description: 'Diseño de sitio web corporativo', quantity: 1, unit_price: 1100000, total_price: 1100000 },
+    { description: '', quantity: 1, unit_price: 0, total_price: 0 },
   ]);
 
-  // Modal para Creación Rápida de Cliente
-  const [showQuickClientModal, setShowQuickClientModal] = useState(false);
-  const [newClientName, setNewClientName] = useState('');
-  const [newClientDocType, setNewClientDocType] = useState('NIT');
-  const [newClientDocNum, setNewClientDocNum] = useState('');
-  const [newClientEmail, setNewClientEmail] = useState('');
-  const [newClientPhone, setNewClientPhone] = useState('');
-  const [newClientAddress, setNewClientAddress] = useState('');
+  const showToast = (message: string, type: 'error' | 'success' = 'error') => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 4000);
+  };
 
   useEffect(() => {
     let mounted = true;
-    Promise.all([getClients(), getProfile(), getDocuments()]).then(([cls, prof, existingDocs]) => {
+    Promise.all([getClients(), getProfile(), getDocuments()]).then(([cls, , existingDocs]) => {
       if (!mounted) return;
       setClients(cls);
-      setProfile(prof);
-
       if (cls.length > 0) {
-        setSelectedClientId((prev) => prev || cls[0].id);
+        setSelectedClientOption(cls[0].id);
+        setClientNameInput(cls[0].name);
+        setClientDocNumInput(cls[0].document_number);
+        setClientDocTypeInput(cls[0].document_type || 'CC');
+      } else {
+        setSelectedClientOption('new');
       }
 
       const typeDocs = existingDocs.filter((d) => d.type === 'bill');
@@ -70,7 +70,23 @@ export default function DocumentForm() {
     };
   }, []);
 
-  // Al cambiar el tipo de documento (Cotización / Cuenta de Cobro), actualizar consecutivo
+  const handleClientSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value;
+    setSelectedClientOption(val);
+    if (val === 'new') {
+      setClientNameInput('');
+      setClientDocNumInput('');
+      setClientDocTypeInput('CC');
+    } else {
+      const selected = clients.find((c) => c.id === val);
+      if (selected) {
+        setClientNameInput(selected.name);
+        setClientDocNumInput(selected.document_number);
+        setClientDocTypeInput(selected.document_type || 'CC');
+      }
+    }
+  };
+
   const handleTypeChange = async (newType: DocumentType) => {
     setType(newType);
     const existingDocs = await getDocuments();
@@ -78,17 +94,16 @@ export default function DocumentForm() {
     setNumber(generateNextNumber(newType, typeDocs.length));
   };
 
-  // Manejo de Items dinámicos
   const handleItemChange = (index: number, field: keyof DocumentItem, value: string | number) => {
     const updatedItems = [...items];
     const item = { ...updatedItems[index], [field]: value };
-    
+
     if (field === 'quantity' || field === 'unit_price') {
       const q = typeof item.quantity === 'number' ? item.quantity : parseFloat(String(item.quantity)) || 0;
       const p = typeof item.unit_price === 'number' ? item.unit_price : parseFloat(String(item.unit_price)) || 0;
-      item.total_price = q * p;
+      item.total_price = Math.round((q * p + Number.EPSILON) * 100) / 100;
     }
-    
+
     updatedItems[index] = item;
     setItems(updatedItems);
   };
@@ -102,508 +117,444 @@ export default function DocumentForm() {
     setItems(items.filter((_, i) => i !== index));
   };
 
-  // Cálculos Automáticos de Subtotal, Retención y Total
-  const subtotal = items.reduce((sum, item) => sum + (Number(item.total_price) || 0), 0);
-  const retentionAmount = retentionApplied ? (subtotal * (retentionRate / 100)) : 0;
-  const totalAmount = subtotal - retentionAmount;
+  // Cálculos en tiempo real mediante taxCalculator.ts
+  const validItems = items.filter((it) => it.description.trim() !== '' || it.unit_price > 0);
+  const summary = calculateDocumentSummary({
+    items: validItems.length > 0 ? validItems : items,
+    discountRate,
+    taxRate,
+    retentionApplied,
+    retentionRate,
+  });
 
-  // Guardar rápido nuevo cliente
-  const handleCreateQuickClient = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newClientName || !newClientDocNum) return;
-
-    const created = await createClient({
-      name: newClientName,
-      document_type: newClientDocType,
-      document_number: newClientDocNum,
-      email: newClientEmail,
-      phone: newClientPhone,
-      address: newClientAddress,
-    });
-
-    setClients([...clients, created]);
-    setSelectedClientId(created.id);
-    setShowQuickClientModal(false);
-    
-    // Limpiar campos modal
-    setNewClientName('');
-    setNewClientDocNum('');
-    setNewClientEmail('');
-    setNewClientPhone('');
-    setNewClientAddress('');
-  };
-
-  // Guardar Documento
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedClientId) {
-      alert('Por favor selecciona o crea un cliente para el documento.');
+  const executeSave = useCallback(async () => {
+    if (!clientNameInput.trim()) {
+      showToast('Por favor ingresa el nombre del cliente.');
       return;
     }
 
-    if (items.length === 0 || subtotal <= 0) {
-      alert('Por favor agrega al menos un ítem con valor superior a 0.');
+    const firstValidItem = items.find((i) => i.description.trim() !== '' && i.unit_price > 0);
+    if (!firstValidItem) {
+      showToast('Por favor ingresa al menos un ítem con descripción y precio.');
       return;
     }
 
     setSaving(true);
     try {
+      let selectedClientId: string;
+
+      if (selectedClientOption && selectedClientOption !== 'new') {
+        selectedClientId = selectedClientOption;
+      } else {
+        const matched = clients.find(
+          (c) => c.name.toLowerCase() === clientNameInput.trim().toLowerCase()
+        );
+
+        if (matched) {
+          selectedClientId = matched.id;
+        } else {
+          const newClient = await createClient({
+            name: clientNameInput.trim(),
+            document_type: clientDocTypeInput || 'CC',
+            document_number: clientDocNumInput.trim() || '0',
+          });
+          selectedClientId = newClient.id;
+        }
+      }
+
       const saved = await saveDocument({
         client_id: selectedClientId,
         type,
         number,
         date,
-        due_date: dueDate || undefined,
+        discount_rate: discountRate,
+        discount_amount: summary.discountAmount,
+        tax_rate: taxRate,
+        tax_amount: summary.taxAmount,
         retention_applied: retentionApplied,
         retention_rate: retentionRate,
-        retention_amount: retentionAmount,
-        subtotal,
-        total_amount: totalAmount,
+        retention_amount: summary.retentionAmount,
+        subtotal: summary.subtotal,
+        total_amount: summary.totalAmount,
+        amount_in_words: summary.amountInWords,
         status: 'draft',
-        notes,
-        document_items: items,
+        notes: '',
+        document_items: items.filter((i) => i.description.trim() !== ''),
       });
 
       router.push(`/documents/${saved.id}`);
     } catch (err) {
       console.error(err);
-      alert('Error guardando el documento');
+      showToast('Error al guardar el documento. Intenta nuevamente.');
     } finally {
       setSaving(false);
     }
+  }, [
+    clientNameInput,
+    items,
+    clients,
+    selectedClientOption,
+    clientDocTypeInput,
+    clientDocNumInput,
+    type,
+    number,
+    date,
+    discountRate,
+    summary,
+    taxRate,
+    retentionApplied,
+    retentionRate,
+    router,
+  ]);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    executeSave();
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-12 text-slate-500">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
-        Cargando formulario...
+      <div className="p-12 text-center text-slate-500 space-y-3">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-slate-900 dark:border-white mx-auto"></div>
+        <p className="text-sm font-semibold">Cargando formulario...</p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-8 max-w-5xl mx-auto pb-12">
-      <form onSubmit={handleSubmit} className="space-y-8">
+    <div className="space-y-8 max-w-6xl mx-auto pb-24 md:pb-12">
       
-      {/* 1. Selector de Tipo de Documento y Consecutivo */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-100 pb-4 mb-6">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <FileText className="w-5 h-5 text-blue-600" />
-              Tipo de Documento Normativo
-            </h2>
-            <p className="text-xs text-slate-500">
-              Selecciona si deseas generar una Cotización comercial o una Cuenta de Cobro.
-            </p>
-          </div>
-
-          {/* Switch Selector */}
-          <div className="flex bg-slate-100 p-1 rounded-lg border border-slate-200">
-            <button
-              type="button"
-              onClick={() => handleTypeChange('bill')}
-              className={`px-4 py-2 text-sm font-semibold rounded-md transition-all ${
-                type === 'bill'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Cuenta de Cobro
-            </button>
-            <button
-              type="button"
-              onClick={() => handleTypeChange('quotation')}
-              className={`px-4 py-2 text-sm font-semibold rounded-md transition-all ${
-                type === 'quotation'
-                  ? 'bg-blue-600 text-white shadow-sm'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              Cotización
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-              Número de Consecutivo
-            </label>
-            <input
-              type="text"
-              required
-              value={number}
-              onChange={(e) => setNumber(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-bold text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-              Fecha de Emisión
-            </label>
-            <input
-              type="date"
-              required
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-              Fecha Limite / Vencimiento
-            </label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* 2. Selección de Cliente */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-            <Building2 className="w-5 h-5 text-blue-600" />
-            Información del Cliente / Receptor
-          </h2>
-          <button
-            type="button"
-            onClick={() => setShowQuickClientModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-semibold rounded-lg border border-blue-200 transition"
-          >
-            <UserPlus className="w-4 h-4" />
-            Nuevo Cliente Rápido
-          </button>
-        </div>
-
-        {clients.length > 0 ? (
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-              Seleccionar Cliente Existente (Supabase)
-            </label>
-            <select
-              value={selectedClientId}
-              onChange={(e) => setSelectedClientId(e.target.value)}
-              className="w-full px-3 py-2.5 border border-slate-300 rounded-lg text-sm text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            >
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name} — ({c.document_type}: {c.document_number})
-                </option>
-              ))}
-            </select>
-          </div>
-        ) : (
-          <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-sm flex justify-between items-center">
-            <span>No tienes clientes registrados aún. Haz clic para agregar el primero.</span>
-            <button
-              type="button"
-              onClick={() => setShowQuickClientModal(true)}
-              className="px-3 py-1.5 bg-amber-600 text-white font-semibold rounded-md text-xs"
-            >
-              Crear Cliente
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* 3. Tabla Dinámica de Ítems */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        <div className="flex justify-between items-center mb-4">
-          <div>
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Calculator className="w-5 h-5 text-blue-600" />
-              Detalle de Conceptos / Servicios
-            </h2>
-            <p className="text-xs text-slate-500">Agrega las líneas de servicio o productos con su valor unitario.</p>
-          </div>
-          <button
-            type="button"
-            onClick={addItem}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 text-white hover:bg-emerald-700 text-xs font-semibold rounded-lg shadow-sm transition"
-          >
-            <Plus className="w-4 h-4" />
-            Agregar Línea
-          </button>
-        </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse min-w-[600px]">
-            <thead>
-              <tr className="bg-slate-100 text-slate-700 text-xs font-semibold uppercase">
-                <th className="py-2.5 px-3 w-16 text-center">Cant.</th>
-                <th className="py-2.5 px-3">Descripción del Servicio / Producto</th>
-                <th className="py-2.5 px-3 w-36 text-right">Precio Unit. (COP)</th>
-                <th className="py-2.5 px-3 w-36 text-right">Total</th>
-                <th className="py-2.5 px-2 w-12 text-center"></th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-200">
-              {items.map((item, index) => (
-                <tr key={index} className="hover:bg-slate-50/50">
-                  <td className="py-2 px-2 align-top">
-                    <input
-                      type="number"
-                      min="0.01"
-                      step="any"
-                      required
-                      value={item.quantity}
-                      onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
-                      className="w-full text-center px-2 py-1.5 border border-slate-300 rounded text-sm text-slate-900 focus:ring-2 focus:ring-blue-500"
-                    />
-                  </td>
-                  <td className="py-2 px-2 align-top">
-                    <textarea
-                      rows={2}
-                      required
-                      placeholder="Escribe el concepto o descripción del servicio..."
-                      value={item.description}
-                      onChange={(e) => handleItemChange(index, 'description', e.target.value)}
-                      className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm text-slate-900 focus:ring-2 focus:ring-blue-500"
-                    />
-                  </td>
-                  <td className="py-2 px-2 align-top">
-                    <input
-                      type="number"
-                      min="0"
-                      step="any"
-                      required
-                      value={item.unit_price}
-                      onChange={(e) => handleItemChange(index, 'unit_price', e.target.value)}
-                      className="w-full text-right px-2 py-1.5 border border-slate-300 rounded text-sm font-medium text-slate-900 focus:ring-2 focus:ring-blue-500"
-                    />
-                  </td>
-                  <td className="py-2 px-3 text-right font-bold text-slate-900 align-top pt-3 text-sm">
-                    {formatCOP(item.total_price)}
-                  </td>
-                  <td className="py-2 px-2 text-center align-top pt-2">
-                    <button
-                      type="button"
-                      onClick={() => removeItem(index)}
-                      disabled={items.length <= 1}
-                      className="p-1.5 text-slate-400 hover:text-red-600 disabled:opacity-30 rounded transition"
-                      title="Eliminar fila"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Bloque de Totales y Retención */}
-        <div className="mt-6 pt-4 border-t border-slate-200 flex flex-col md:flex-row justify-between items-start gap-6">
-          
-          {/* Configuración Retención en la fuente */}
-          <div className="w-full md:w-1/2 bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-            <div className="flex items-center justify-between">
-              <label className="flex items-center gap-2 text-xs font-bold text-slate-800 uppercase cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={retentionApplied}
-                  onChange={(e) => setRetentionApplied(e.target.checked)}
-                  className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500"
-                />
-                <Percent className="w-4 h-4 text-blue-600" />
-                Aplicar Retención en la Fuente
-              </label>
-            </div>
-
-            {retentionApplied && (
-              <div className="flex items-center gap-3 pt-2">
-                <label className="text-xs text-slate-600">Porcentaje ReteFuente:</label>
-                <select
-                  value={retentionRate}
-                  onChange={(e) => setRetentionRate(parseFloat(e.target.value))}
-                  className="px-2.5 py-1 border border-slate-300 rounded text-xs font-bold text-slate-900 bg-white"
-                >
-                  <option value={2.5}>2.5% (Servicios Generales)</option>
-                  <option value={3.5}>3.5% (Transporte / Otros)</option>
-                  <option value={4.0}>4.0% (Honorarios / Empleadores)</option>
-                  <option value={10.0}>10.0% (Honorarios sin contrato)</option>
-                  <option value={11.0}>11.0% (Honorarios declarantes)</option>
-                </select>
-              </div>
-            )}
-          </div>
-
-          {/* Desglose Matemático */}
-          <div className="w-full md:w-1/2 bg-slate-900 text-white p-5 rounded-xl space-y-2">
-            <div className="flex justify-between text-sm text-slate-300">
-              <span>Subtotal Servicios:</span>
-              <span className="font-semibold text-white">{formatCOP(subtotal)}</span>
-            </div>
-
-            {retentionApplied && (
-              <div className="flex justify-between text-xs text-amber-400">
-                <span>(-) Retefuente ({retentionRate}%):</span>
-                <span>-{formatCOP(retentionAmount)}</span>
-              </div>
-            )}
-
-            <div className="border-t border-slate-700 pt-3 flex justify-between items-center">
-              <span className="text-sm font-bold uppercase tracking-wider text-slate-300">
-                {type === 'bill' ? 'Valor Neto a Pagarme:' : 'Total Cotizado:'}
-              </span>
-              <span className="text-2xl font-black text-emerald-400">
-                {formatCOP(totalAmount)}
-              </span>
-            </div>
-          </div>
-
-        </div>
-      </div>
-
-      {/* 4. Notas Adicionales */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-          Notas u Observaciones
-        </label>
-        <textarea
-          rows={2}
-          placeholder="Condiciones de pago, tiempo de entrega o validez..."
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 focus:ring-2 focus:ring-blue-500"
-        />
-      </div>
-
-      {/* 5. Vista Previa de Normativa Colombiana */}
-      {type === 'bill' && profile && (
-        <div className="bg-blue-50 border border-blue-200 p-4 rounded-xl text-xs text-blue-900 space-y-1">
-          <p className="font-bold flex items-center gap-1.5 text-blue-950">
-            <AlertCircle className="w-4 h-4 text-blue-600" />
-            Normatividad Aplicable Incorporada Automáticamente:
-          </p>
-          <p className="italic text-slate-700">{profile.legal_text}</p>
-          <p className="font-semibold pt-1 text-slate-800">
-            Pago a Bancolombia ({profile.account_type}): N° {profile.account_number} — Titular: {profile.razon_social}
-          </p>
+      {/* Toast Feedback */}
+      {toast && (
+        <div className="fixed top-20 right-4 z-50 p-4 rounded-xl shadow-xl bg-slate-900 text-white border border-slate-700 text-xs sm:text-sm font-bold animate-bounce">
+          {toast.message}
         </div>
       )}
 
-      {/* Botón Guardar */}
-      <div className="flex justify-end">
-        <button
-          type="submit"
-          disabled={saving}
-          className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl shadow-md transition disabled:opacity-50"
-        >
-          <Save className="w-5 h-5" />
-          {saving ? 'Guardando en Supabase...' : `Generar ${type === 'bill' ? 'Cuenta de Cobro' : 'Cotización'}`}
-        </button>
-      </div>
-      </form>
+      {/* 1. Encabezado */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+            Nuevo documento
+          </h1>
+          <p className="text-sm font-medium text-slate-500 dark:text-slate-400">
+            Se guarda automáticamente mientras escribes
+          </p>
+        </div>
 
-      {/* Modal Creación Rápida de Cliente */}
-      {showQuickClientModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
-            <h3 className="text-lg font-bold text-slate-900 border-b pb-2">
-              Crear Nuevo Cliente Rápido
-            </h3>
-            <form onSubmit={handleCreateQuickClient} className="space-y-3">
+        {/* Toggle Cotización / Cuenta de cobro */}
+        <div className="flex bg-slate-100 dark:bg-slate-800/90 p-1 rounded-xl border border-slate-200 dark:border-slate-700/80 w-full sm:w-auto">
+          <button
+            type="button"
+            onClick={() => handleTypeChange('quotation')}
+            className={`flex-1 sm:flex-none px-4 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all ${
+              type === 'quotation'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Cotización
+          </button>
+          <button
+            type="button"
+            onClick={() => handleTypeChange('bill')}
+            className={`flex-1 sm:flex-none px-4 py-2 text-xs sm:text-sm font-bold rounded-lg transition-all ${
+              type === 'bill'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
+                : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Cuenta de cobro
+          </button>
+        </div>
+      </div>
+
+      <form onSubmit={handleSubmit}>
+        {/* 2. Layout de dos columnas (Stacks vertically en pantallas < 768px) */}
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-start">
+          
+          {/* COLUMNA IZQUIERDA (~7/12 cols): Cliente, Ítems, Ajustes Tributarios */}
+          <div className="md:col-span-7 space-y-6">
+            
+            {/* Card Cliente */}
+            <Card padding="md" className="space-y-4">
+              <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                Cliente
+              </h2>
+
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Nombre o Razón Social</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ej. ACME Colombia S.A.S."
-                  value={newClientName}
-                  onChange={(e) => setNewClientName(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg text-sm"
-                />
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                  Seleccionar Cliente Registrado
+                </label>
+                <select
+                  value={selectedClientOption}
+                  onChange={handleClientSelectChange}
+                  className="w-full px-3.5 py-2.5 border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl text-sm font-semibold text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-slate-900 dark:focus:ring-white focus:outline-hidden"
+                >
+                  <option value="new">➕ Registrar nuevo cliente / Ingreso manual</option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.document_type || 'CC'} {c.document_number})
+                    </option>
+                  ))}
+                </select>
               </div>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Tipo Doc.</label>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                    Tipo Doc.
+                  </label>
                   <select
-                    value={newClientDocType}
-                    onChange={(e) => setNewClientDocType(e.target.value)}
-                    className="w-full px-2 py-2 border rounded-lg text-sm bg-white"
+                    value={clientDocTypeInput}
+                    onChange={(e) => setClientDocTypeInput(e.target.value)}
+                    className="w-full px-3.5 py-2.5 border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl text-sm font-semibold text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-slate-900 dark:focus:ring-white focus:outline-hidden"
                   >
+                    <option value="CC">Cédula (C.C.)</option>
                     <option value="NIT">NIT</option>
-                    <option value="CC">C.C.</option>
-                    <option value="CE">C.E.</option>
+                    <option value="CE">Cédula Ext. (C.E.)</option>
                   </select>
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Número Documento</label>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                    Nombre Completo o Razón Social
+                  </label>
                   <input
                     type="text"
                     required
-                    placeholder="900123456-7"
-                    value={newClientDocNum}
-                    onChange={(e) => setNewClientDocNum(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg text-sm"
+                    placeholder="Nombre del cliente"
+                    value={clientNameInput}
+                    onChange={(e) => setClientNameInput(e.target.value)}
+                    className="w-full px-3.5 py-2.5 border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl text-sm font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-slate-900 dark:focus:ring-white focus:outline-hidden"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Correo Electrónico</label>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                  Número de Identificación
+                </label>
                 <input
-                  type="email"
-                  placeholder="contacto@cliente.com"
-                  value={newClientEmail}
-                  onChange={(e) => setNewClientEmail(e.target.value)}
-                  className="w-full px-3 py-2 border rounded-lg text-sm"
+                  type="text"
+                  placeholder="Número de identificación"
+                  value={clientDocNumInput}
+                  onChange={(e) => setClientDocNumInput(e.target.value)}
+                  className="w-full px-3.5 py-2.5 border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-xl text-sm font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500 focus:ring-2 focus:ring-slate-900 dark:focus:ring-white focus:outline-hidden"
                 />
               </div>
+            </Card>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Teléfono</label>
-                  <input
-                    type="text"
-                    placeholder="+57 300..."
-                    value={newClientPhone}
-                    onChange={(e) => setNewClientPhone(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Dirección</label>
-                  <input
-                    type="text"
-                    placeholder="Calle 100 # 15-20"
-                    value={newClientAddress}
-                    onChange={(e) => setNewClientAddress(e.target.value)}
-                    className="w-full px-3 py-2 border rounded-lg text-sm"
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-4 border-t">
-                <button
+            {/* Card Ítems */}
+            <Card padding="md" className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                  Ítems
+                </h2>
+                <Button
                   type="button"
-                  onClick={() => setShowQuickClientModal(false)}
-                  className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg"
+                  variant="outline"
+                  size="sm"
+                  icon={Plus}
+                  onClick={addItem}
                 >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 text-sm bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700"
-                >
-                  Guardar Cliente
-                </button>
+                  Agregar
+                </Button>
               </div>
-            </form>
+
+              {/* Lista de Filas de Ítems */}
+              <div className="space-y-3">
+                {items.map((item, index) => (
+                  <div
+                    key={index}
+                    className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-center p-3 bg-slate-50 dark:bg-slate-950/60 rounded-xl border border-slate-200 dark:border-slate-800"
+                  >
+                    <div className="sm:col-span-5">
+                      <input
+                        type="text"
+                        placeholder="Descripción del ítem o servicio"
+                        value={item.description}
+                        onChange={(e) => handleItemChange(index, 'description', e.target.value)}
+                        className="w-full px-3 py-2 border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 placeholder-slate-400 dark:placeholder-slate-500"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Cant."
+                        value={item.quantity || ''}
+                        onChange={(e) => handleItemChange(index, 'quantity', parseFloat(e.target.value) || 0)}
+                        className="w-full px-3 py-2 border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 text-center"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-3">
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="Precio Unit."
+                        value={item.unit_price || ''}
+                        onChange={(e) => handleItemChange(index, 'unit_price', parseFloat(e.target.value) || 0)}
+                        className="w-full px-3 py-2 border border-slate-300 dark:border-slate-800 bg-white dark:bg-slate-900 rounded-lg text-xs font-semibold text-slate-900 dark:text-slate-100 text-right"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2 flex items-center justify-between gap-1 pl-1">
+                      <span className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {formatCOP(item.total_price)}
+                      </span>
+                      {items.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => removeItem(index)}
+                          className="p-1.5 text-slate-400 hover:text-red-500 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+
+            {/* Card Ajustes Tributarios */}
+            <Card padding="md" className="space-y-4">
+              <h2 className="text-base font-bold text-slate-900 dark:text-slate-100">
+                Ajustes tributarios
+              </h2>
+
+              <div className="space-y-4">
+                {/* Checkbox ReteFuente */}
+                <div className="flex items-start gap-3">
+                  <input
+                    id="retentionApplied"
+                    type="checkbox"
+                    checked={retentionApplied}
+                    onChange={(e) => setRetentionApplied(e.target.checked)}
+                    className="mt-1 w-4 h-4 rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500"
+                  />
+                  <div className="space-y-1">
+                    <label htmlFor="retentionApplied" className="text-sm font-semibold text-slate-900 dark:text-slate-100 cursor-pointer">
+                      Aplicar retención en la fuente (Art. 383 E.T.)
+                    </label>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      ReteFuente aplicable a pagos/abonos en cuenta por honorarios o servicios.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Slider Tarifa ReteFuente */}
+                {retentionApplied && (
+                  <div className="pl-7 space-y-2 p-3 bg-slate-50 dark:bg-slate-950/60 rounded-xl border border-slate-200 dark:border-slate-800">
+                    <div className="flex justify-between items-center text-xs font-bold">
+                      <span className="text-slate-700 dark:text-slate-300">Tarifa de Retención</span>
+                      <span className="text-blue-600 dark:text-blue-400">{retentionRate.toFixed(1)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="2.5"
+                      max="11"
+                      step="0.5"
+                      value={retentionRate}
+                      onChange={(e) => setRetentionRate(parseFloat(e.target.value))}
+                      className="w-full accent-blue-600 cursor-pointer"
+                    />
+                  </div>
+                )}
+
+                {/* Checkbox IVA */}
+                <div className="flex items-start gap-3 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+                  <input
+                    id="taxApplied"
+                    type="checkbox"
+                    checked={taxRate > 0}
+                    onChange={(e) => setTaxRate(e.target.checked ? 19 : 0)}
+                    className="mt-1 w-4 h-4 rounded border-slate-300 dark:border-slate-700 text-blue-600 focus:ring-blue-500"
+                  />
+                  <div className="space-y-1">
+                    <label htmlFor="taxApplied" className="text-sm font-semibold text-slate-900 dark:text-slate-100 cursor-pointer">
+                      IVA (19%) — No aplica Decreto 522 / Art. 437 E.T.
+                    </label>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Habilitar únicamente si la persona natural o empresa es responsable de IVA.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
           </div>
+
+          {/* COLUMNA DERECHA (~5/12 cols): Panel de Resumen Fijo / Sticky */}
+          <div className="md:col-span-5 md:sticky md:top-24 space-y-4">
+            
+            <Card padding="md" className="space-y-6 shadow-md border-slate-300 dark:border-slate-800">
+              <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800/80 pb-3">
+                Resumen del documento
+              </h2>
+
+              <div className="space-y-3 text-sm">
+                <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                  <span>Subtotal</span>
+                  <span className="font-semibold text-slate-900 dark:text-slate-100">{formatCOP(summary.subtotal)}</span>
+                </div>
+
+                {summary.retentionAmount > 0 && (
+                  <div className="flex justify-between text-amber-600 dark:text-amber-400">
+                    <span>ReteFuente (-{retentionRate}%)</span>
+                    <span className="font-semibold">-{formatCOP(summary.retentionAmount)}</span>
+                  </div>
+                )}
+
+                {summary.taxAmount > 0 && (
+                  <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                    <span>IVA (+19%)</span>
+                    <span className="font-semibold">{formatCOP(summary.taxAmount)}</span>
+                  </div>
+                )}
+
+                <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex justify-between items-baseline">
+                  <span className="text-base font-extrabold text-slate-900 dark:text-white">Total</span>
+                  <span className="text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+                    {formatCOP(summary.totalAmount)}
+                  </span>
+                </div>
+
+                {summary.amountInWords && (
+                  <div className="pt-2 text-xs italic text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-950/60 p-3 rounded-xl border border-slate-100 dark:border-slate-800/60">
+                    &quot;{summary.amountInWords}&quot;
+                  </div>
+                )}
+              </div>
+
+              <Button
+                type="submit"
+                disabled={saving}
+                className="w-full shadow-md py-3 text-base font-bold"
+              >
+                {saving ? 'Generando documento...' : 'Generar documento'}
+              </Button>
+            </Card>
+
+          </div>
+
         </div>
-      )}
+
+        {/* Floating Mobile Bottom Action Bar */}
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 flex md:hidden items-center justify-between z-40 gap-4 shadow-lg">
+          <div>
+            <span className="text-2xs uppercase tracking-wider text-slate-400 block font-bold">Total a pagar</span>
+            <span className="text-lg font-black text-slate-900 dark:text-white">{formatCOP(summary.totalAmount)}</span>
+          </div>
+          <Button type="submit" disabled={saving} size="md">
+            {saving ? 'Guardando...' : 'Generar'}
+          </Button>
+        </div>
+
+      </form>
 
     </div>
   );

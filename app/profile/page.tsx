@@ -2,27 +2,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { 
-  UserCheck, 
-  Building2, 
-  CreditCard, 
-  Scale, 
-  Save, 
-  CheckCircle,
-  FileSignature,
-  Upload,
-  Trash2
-} from 'lucide-react';
+import { UserCheck, Save, Upload, Trash2, Building, CreditCard, ShieldCheck } from 'lucide-react';
 import { Profile } from '@/lib/types';
 import { getProfile, saveProfile } from '@/lib/storage';
-import { DEFAULT_LEGAL_TEXT } from '@/lib/utils';
 
 export default function ProfilePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [savedSuccess, setSavedSuccess] = useState(false);
+  const [successMsg, setSuccessMsg] = useState(false);
 
-  const [formData, setFormData] = useState<Profile>({
+  const [profile, setProfile] = useState<Profile>({
     razon_social: '',
     document_type: 'CC',
     document_number: '',
@@ -33,63 +22,58 @@ export default function ProfilePage() {
     bank_name: 'Bancolombia',
     account_type: 'Ahorros',
     account_number: '',
-    legal_text: DEFAULT_LEGAL_TEXT,
+    legal_text: '',
     signature_url: '',
   });
 
   useEffect(() => {
-    async function load() {
-      setLoading(true);
-      const prof = await getProfile();
-      if (prof) setFormData(prof);
-      setLoading(false);
-    }
-    load();
+    let mounted = true;
+    getProfile().then((prof) => {
+      if (mounted) {
+        setProfile(prof);
+        setLoading(false);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
   }, []);
 
   const handleChange = (field: keyof Profile, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    setSavedSuccess(false);
+    setProfile((prev) => ({ ...prev, [field]: value }));
   };
 
-  // Carga de archivo de firma (conversión a Base64 Data URL)
   const handleSignatureUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (!file.type.startsWith('image/')) {
-      alert('Por favor selecciona un archivo de imagen válido (.png, .jpg, .svg)');
-      return;
-    }
-
-    // Límite 2MB
     if (file.size > 2 * 1024 * 1024) {
-      alert('La imagen de la firma debe ser menor a 2MB.');
+      alert('La imagen de la firma no debe superar 2 MB.');
       return;
     }
 
     const reader = new FileReader();
-    reader.onload = (event) => {
-      const dataUrl = event.target?.result as string;
-      handleChange('signature_url', dataUrl);
+    reader.onloadend = () => {
+      const base64String = reader.result as string;
+      setProfile((prev) => ({ ...prev, signature_url: base64String }));
     };
     reader.readAsDataURL(file);
   };
 
   const handleRemoveSignature = () => {
-    handleChange('signature_url', '');
+    setProfile((prev) => ({ ...prev, signature_url: '' }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     try {
-      await saveProfile(formData);
-      setSavedSuccess(true);
-      setTimeout(() => setSavedSuccess(false), 4000);
+      await saveProfile(profile);
+      setSuccessMsg(true);
+      setTimeout(() => setSuccessMsg(false), 3000);
     } catch (err) {
       console.error(err);
-      alert('Error guardando perfil');
+      alert('Error al guardar los datos del emisor.');
     } finally {
       setSaving(false);
     }
@@ -97,205 +81,198 @@ export default function ProfilePage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center p-12 text-slate-500">
+      <div className="flex items-center justify-center p-12 text-slate-500 dark:text-slate-400">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mr-3"></div>
-        Cargando perfil emisor...
+        Cargando información del emisor...
       </div>
     );
   }
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 pb-12">
-      
-      <div>
-        <h1 className="text-2xl font-extrabold text-slate-900 flex items-center gap-2">
-          <UserCheck className="w-6 h-6 text-blue-600" />
-          Datos del Emisor / Facturador
+      <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm transition-colors">
+        <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+          <UserCheck className="w-6 h-6 text-blue-600 dark:text-blue-400" />
+          Perfil del Emisor / Datos Propios
         </h1>
-        <p className="text-xs text-slate-500 mt-1">
-          Configura tus datos personales o empresariales, cuenta Bancolombia, firma digital y texto legal normativo para tus Cuentas de Cobro.
+        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400">
+          Configura tus datos fiscales y bancarios. Se incluirán automáticamente en tus Cuentas de Cobro y Cotizaciones.
         </p>
       </div>
 
-      {savedSuccess && (
-        <div className="bg-emerald-50 border border-emerald-300 text-emerald-800 p-4 rounded-xl flex items-center gap-3 text-sm font-semibold">
-          <CheckCircle className="w-5 h-5 text-emerald-600" />
-          ¡Datos del emisor y firma digital actualizados correctamente!
+      {successMsg && (
+        <div className="p-4 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 rounded-xl text-emerald-800 dark:text-emerald-300 text-sm font-semibold flex items-center gap-2">
+          <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+          ¡Los datos del emisor y la firma han sido guardados exitosamente!
         </div>
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
         
-        {/* 1. Datos Identificación Emisor */}
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-          <h2 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-3 flex items-center gap-2">
-            <Building2 className="w-5 h-5 text-blue-600" />
-            1. Información Identificación y Contacto
+        {/* 1. Datos Identificación */}
+        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 transition-colors">
+          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800 pb-2 flex items-center gap-2">
+            <Building className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            1. Información Legal y Contacto
           </h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2">
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                Razón Social / Nombre Completo
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                Nombre Completo o Razón Social (Emisor)
               </label>
               <input
                 type="text"
                 required
-                value={formData.razon_social}
+                value={profile.razon_social}
                 onChange={(e) => handleChange('razon_social', e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-blue-500"
               />
             </div>
 
-            <div className="grid grid-cols-3 gap-2">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Tipo Doc.</label>
-                <select
-                  value={formData.document_type}
-                  onChange={(e) => handleChange('document_type', e.target.value)}
-                  className="w-full px-2 py-2 border border-slate-300 rounded-lg text-sm bg-white text-slate-900"
-                >
-                  <option value="CC">C.C.</option>
-                  <option value="NIT">NIT</option>
-                  <option value="CE">C.E.</option>
-                </select>
-              </div>
-              <div className="col-span-2">
-                <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Número Documento</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.document_number}
-                  onChange={(e) => handleChange('document_number', e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900"
-                />
-              </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">Tipo Documento</label>
+              <select
+                value={profile.document_type}
+                onChange={(e) => handleChange('document_type', e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
+              >
+                <option value="CC">Cédula de Ciudadanía (C.C.)</option>
+                <option value="NIT">NIT</option>
+                <option value="CE">Cédula de Extranjería (C.E.)</option>
+              </select>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Teléfono Móvil / Fijo</label>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">Número de Documento</label>
               <input
                 type="text"
                 required
-                value={formData.phone}
-                onChange={(e) => handleChange('phone', e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900"
+                value={profile.document_number}
+                onChange={(e) => handleChange('document_number', e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Correo Electrónico</label>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">Teléfono Móvil / Fijo</label>
+              <input
+                type="text"
+                value={profile.phone}
+                onChange={(e) => handleChange('phone', e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">Correo Electrónico</label>
               <input
                 type="email"
                 required
-                value={formData.email}
+                value={profile.email}
                 onChange={(e) => handleChange('email', e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Dirección Física</label>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">Dirección de Domicilio</label>
               <input
                 type="text"
-                value={formData.address}
+                value={profile.address}
                 onChange={(e) => handleChange('address', e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Ciudad y Departamento</label>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">Ciudad / Municipio</label>
               <input
                 type="text"
-                value={formData.city}
+                value={profile.city}
                 onChange={(e) => handleChange('city', e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
               />
             </div>
           </div>
         </div>
 
-        {/* 2. Firma Digital del Emisor */}
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-          <h2 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-3 flex items-center gap-2">
-            <FileSignature className="w-5 h-5 text-indigo-600" />
+        {/* 2. Firma Digital */}
+        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 transition-colors">
+          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800 pb-2 flex items-center gap-2">
+            <Upload className="w-5 h-5 text-blue-600 dark:text-blue-400" />
             2. Imagen de Firma Digital
           </h2>
-          <p className="text-xs text-slate-500">
-            Sube una imagen limpia de tu firma (formato PNG transparente o JPG). Esta imagen aparecerá sobre la línea de firma en tus cotizaciones y cuentas de cobro.
-          </p>
 
-          <div className="flex flex-col sm:flex-row items-center gap-6 pt-2">
-            {formData.signature_url ? (
-              <div className="flex flex-col items-center gap-2">
-                <div className="w-64 h-28 border border-dashed border-slate-300 rounded-lg bg-slate-50 flex items-center justify-center p-2 relative group">
-                  {/* eslint-disable-next-html-element-suppress */}
-                  <img
-                    src={formData.signature_url}
-                    alt="Firma Digital Emisor"
-                    className="max-h-full max-w-full object-contain"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={handleRemoveSignature}
-                  className="flex items-center gap-1 text-xs text-red-600 hover:text-red-700 font-semibold"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  Eliminar / Cambiar Firma
-                </button>
-              </div>
-            ) : (
-              <label className="w-full sm:w-80 h-32 border-2 border-dashed border-slate-300 hover:border-indigo-500 rounded-xl flex flex-col items-center justify-center cursor-pointer bg-slate-50 hover:bg-indigo-50/40 transition">
-                <Upload className="w-8 h-8 text-indigo-500 mb-1" />
-                <span className="text-xs font-bold text-slate-700">Subir Imagen de Firma</span>
-                <span className="text-[10px] text-slate-400">PNG, JPG o SVG (Máx 2MB)</span>
+          <div className="flex flex-col sm:flex-row items-center gap-6">
+            <div className="w-full sm:w-64 h-32 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl flex items-center justify-center p-2 bg-slate-50 dark:bg-slate-950 overflow-hidden relative">
+              {profile.signature_url ? (
+                <img
+                  src={profile.signature_url}
+                  alt="Firma emisor"
+                  className="max-h-full max-w-full object-contain"
+                />
+              ) : (
+                <span className="text-xs text-slate-400 text-center font-medium">Sin firma cargada</span>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <label className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 dark:bg-slate-800 dark:hover:bg-slate-700 text-white text-xs font-bold rounded-lg cursor-pointer transition">
+                <Upload className="w-4 h-4" />
+                Subir Imagen de Firma
                 <input
                   type="file"
-                  accept="image/*"
+                  accept="image/png, image/jpeg, image/jpg"
                   onChange={handleSignatureUpload}
                   className="hidden"
                 />
               </label>
-            )}
 
-            <div className="text-xs text-slate-500 space-y-1">
-              <p className="font-semibold text-slate-700">Consejos para una firma clara:</p>
-              <ul className="list-disc list-inside space-y-0.5 text-slate-600">
-                <li>Utiliza fondo blanco o transparente (PNG).</li>
-                <li>Asegúrate de que el trazo de la firma sea oscuro y visible.</li>
-                <li>Si tienes un PDF firmado (ej. en Descargas), tómale una captura recortada a la firma.</li>
-              </ul>
+              {profile.signature_url && (
+                <div>
+                  <button
+                    type="button"
+                    onClick={handleRemoveSignature}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 dark:bg-red-950/60 text-red-600 dark:text-red-300 hover:bg-red-100 text-xs font-semibold rounded-lg border border-red-200 dark:border-red-800 transition"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    Eliminar Firma
+                  </button>
+                </div>
+              )}
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                Formatos recomendados: PNG con fondo transparente o JPG. Tamaño máx: 2 MB.
+              </p>
             </div>
           </div>
         </div>
 
-        {/* 3. Datos Bancarios (Bancolombia) */}
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-          <h2 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-3 flex items-center gap-2">
-            <CreditCard className="w-5 h-5 text-emerald-600" />
-            3. Datos Bancarios (Requerido para Cuentas de Cobro)
+        {/* 3. Datos Bancarios */}
+        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 transition-colors">
+          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800 pb-2 flex items-center gap-2">
+            <CreditCard className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            3. Cuenta Bancaria para Recibir Transferencias
           </h2>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Entidad Bancaria</label>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">Entidad Bancaria</label>
               <input
                 type="text"
                 required
-                value={formData.bank_name}
+                value={profile.bank_name}
                 onChange={(e) => handleChange('bank_name', e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-semibold text-slate-900"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Tipo de Cuenta</label>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">Tipo de Cuenta</label>
               <select
-                value={formData.account_type}
+                value={profile.account_type}
                 onChange={(e) => handleChange('account_type', e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-semibold text-slate-900"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
               >
                 <option value="Ahorros">Cuenta de Ahorros</option>
                 <option value="Corriente">Cuenta Corriente</option>
@@ -303,52 +280,76 @@ export default function ProfilePage() {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">Número de Cuenta</label>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">Número de Cuenta</label>
               <input
                 type="text"
                 required
-                value={formData.account_number}
+                value={profile.account_number}
                 onChange={(e) => handleChange('account_number', e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-bold text-slate-900"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
+              />
+            </div>
+
+            <div className="sm:col-span-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                Nombre del Titular de la Cuenta (Opcional - Si difiere del Emisor)
+              </label>
+              <input
+                type="text"
+                placeholder={profile.razon_social || 'Nombre completo del titular'}
+                value={profile.account_holder_name || ''}
+                onChange={(e) => handleChange('account_holder_name', e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-sm text-slate-900 dark:text-slate-100"
               />
             </div>
           </div>
         </div>
 
-        {/* 4. Normativa Legal Colombia */}
-        <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm space-y-4">
-          <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <Scale className="w-5 h-5 text-amber-600" />
-              4. Texto Legal Normativo (Art. 383 Estatuto Tributario)
-            </h2>
-            <button
-              type="button"
-              onClick={() => handleChange('legal_text', DEFAULT_LEGAL_TEXT)}
-              className="text-xs text-blue-600 hover:underline font-semibold"
-            >
-              Restablecer Texto Oficial
-            </button>
-          </div>
+        {/* 4. Declaración Juramentada y Subtítulo Legal */}
+        <div className="bg-white dark:bg-slate-900 p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 transition-colors">
+          <h2 className="text-base font-bold text-slate-900 dark:text-slate-100 border-b border-slate-100 dark:border-slate-800 pb-2 flex items-center gap-2">
+            <ShieldCheck className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+            4. Textos Legales y Encabezado de Cuenta de Cobro (Art. 383 E.T.)
+          </h2>
 
-          <div>
-            <textarea
-              rows={4}
-              value={formData.legal_text}
-              onChange={(e) => handleChange('legal_text', e.target.value)}
-              className="w-full p-3 border border-slate-300 rounded-lg text-xs leading-relaxed text-slate-800 font-mono"
-            />
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                Subtítulo del Documento (Normativa / Decreto)
+              </label>
+              <input
+                type="text"
+                value={profile.document_subtitle || ''}
+                onChange={(e) => handleChange('document_subtitle', e.target.value)}
+                placeholder="MODELO DE DOCUMENTO EQUIVALENTE A FACTURA (Art. 3 Decreto 522 de Marzo de 2003)"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-xs text-slate-900 dark:text-slate-100 font-semibold"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 uppercase mb-1">
+                Texto de Declaración Legal
+              </label>
+              <textarea
+                rows={3}
+                required
+                value={profile.legal_text}
+                onChange={(e) => handleChange('legal_text', e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 rounded-lg text-xs text-slate-900 dark:text-slate-100 leading-relaxed"
+              />
+            </div>
           </div>
         </div>
 
+        {/* Botón Guardar */}
         <div className="flex justify-end">
           <button
             type="submit"
             disabled={saving}
-            className="flex items-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl shadow-md transition disabled:opacity-50"
+            className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl shadow-md transition disabled:opacity-50"
           >
             <Save className="w-5 h-5" />
-            {saving ? 'Guardando en Supabase...' : 'Guardar Datos Emisor y Firma'}
+            {saving ? 'Guardando...' : 'Guardar Datos Emisor y Firma'}
           </button>
         </div>
 

@@ -28,14 +28,24 @@ export default function PrintTicket({ document: doc, profile }: PrintTicketProps
         <p className="text-[10px] font-normal">{formatDate(doc.date)}</p>
       </div>
 
-      {/* Datos del Cliente */}
-      <div className="border-t border-b border-dashed border-black py-2 my-2 text-[11px]">
-        <p className="font-bold uppercase text-[10px]">CLIENTE:</p>
-        <p className="font-semibold">{doc.clients?.name || 'Cliente Ocasional'}</p>
-        <p className="text-[10px]">
-          {doc.clients?.document_type || 'NIT/CC'}: {doc.clients?.document_number || 'N/A'}
-        </p>
-        {doc.clients?.phone && <p className="text-[10px]">Tel: {doc.clients.phone}</p>}
+      {/* Datos del Cliente y Debe A */}
+      <div className="border-t border-b border-dashed border-black py-2 my-2 text-[11px] space-y-2">
+        <div>
+          <p className="font-bold uppercase text-[10px] text-slate-700">CLIENTE / DEUDOR:</p>
+          <p className="font-bold">{doc.clients?.name || 'Cliente Ocasional'}</p>
+          <p className="text-[10px]">
+            {doc.clients?.document_type || 'NIT/CC'}: {doc.clients?.document_number || 'N/A'}
+          </p>
+          {doc.clients?.phone && <p className="text-[10px]">Tel: {doc.clients.phone}</p>}
+        </div>
+
+        {isBill && (
+          <div className="border-t border-dashed border-slate-300 pt-1.5">
+            <p className="font-bold uppercase text-[10px] text-blue-800">DEBE A (COBRADOR):</p>
+            <p className="font-bold">{profile.razon_social}</p>
+            <p className="text-[10px]">{profile.document_type}: {profile.document_number}</p>
+          </div>
+        )}
       </div>
 
       {/* Detalle de Ítems */}
@@ -69,6 +79,20 @@ export default function PrintTicket({ document: doc, profile }: PrintTicketProps
           <span className="font-bold">{formatCOP(doc.subtotal)}</span>
         </div>
 
+        {doc.discount_rate ? doc.discount_rate > 0 && (
+          <div className="flex justify-between text-[10px]">
+            <span>(-) Desc ({doc.discount_rate}%):</span>
+            <span>-{formatCOP(doc.discount_amount || 0)}</span>
+          </div>
+        ) : null}
+
+        {doc.tax_rate ? doc.tax_rate > 0 && (
+          <div className="flex justify-between text-[10px]">
+            <span>(+) IVA ({doc.tax_rate}%):</span>
+            <span>+{formatCOP(doc.tax_amount || 0)}</span>
+          </div>
+        ) : null}
+
         {doc.retention_applied && doc.retention_amount > 0 && (
           <div className="flex justify-between text-[10px]">
             <span>(-) ReteFuente ({doc.retention_rate}%):</span>
@@ -80,6 +104,12 @@ export default function PrintTicket({ document: doc, profile }: PrintTicketProps
           <span>{isBill ? 'NETO A PAGAR:' : 'TOTAL:'}</span>
           <span>{formatCOP(doc.total_amount)}</span>
         </div>
+
+        {doc.amount_in_words && (
+          <p className="text-[8px] text-center italic border-t border-slate-300 pt-1 uppercase">
+            SON: {doc.amount_in_words}
+          </p>
+        )}
       </div>
 
       {/* Datos de Cuenta Bancaria */}
@@ -103,7 +133,6 @@ export default function PrintTicket({ document: doc, profile }: PrintTicketProps
       <div className="text-center border-t border-dashed border-black pt-3 my-2">
         {profile.signature_url ? (
           <div className="flex justify-center mb-1">
-            {/* eslint-disable-next-html-element-suppress */}
             <img
               src={profile.signature_url}
               alt="Firma"
@@ -113,7 +142,7 @@ export default function PrintTicket({ document: doc, profile }: PrintTicketProps
         ) : (
           <div className="border-b border-black w-36 mx-auto mb-1 h-6"></div>
         )}
-        <p className="font-bold text-[10px]">{profile.razon_social}</p>
+        <p className="font-bold text-[10px] uppercase">{profile.razon_social}</p>
         <p className="text-[9px]">{profile.document_type}: {profile.document_number}</p>
       </div>
 
